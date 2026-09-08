@@ -107,6 +107,8 @@ textarea.done { border-left:3px solid var(--ok); }
 .btn.druhy { background:transparent; color:var(--accent); border:1px solid var(--field-line); }
 .btn.druhy:hover { background:var(--accent-soft); color:var(--ink); }
 .note { font-size:13px; color:var(--muted); margin:10px 0 0; max-width:62ch; }
+.note.ok { color:var(--ok); font-weight:600; }
+.note.warn { color:var(--rust); font-weight:600; }
 #souhrn { display:none; }
 body.view-souhrn #formular { display:none; }
 body.view-souhrn #souhrn { display:block; }
@@ -133,7 +135,7 @@ footer a { color:var(--accent); }
 <header>
   <div class="eyebrow">ZŠ Wagnerovo náměstí, Beroun · PANEL-PROJEKT s.r.o.</div>
   <h1>Jaké práce poběží a kdy tam bude lešení</h1>
-  <p class="lede">Stav před zahájením jsme nafotili <b>30. 8. 2026</b>. Abychom mohli připravit plán dokumentace a cenovou nabídku, potřebujeme od vás vědět, co se kde bude dít a kdy. <b>Vyplňuje se rovnou tady, průběžně se to ukládá.</b></p>
+  <p class="lede">Stav před zahájením jsme nafotili <b>30. 8. 2026</b>. Abychom mohli připravit plán dokumentace a cenovou nabídku, potřebujeme od vás vědět, co se kde bude dít a kdy. <b>Vyplňuje se rovnou tady, ukládá se to průběžně a rovnou nám to chodí.</b></p>
 </header>
 
 <div class="bar">
@@ -289,7 +291,7 @@ footer a { color:var(--accent); }
       <button type="button" class="btn" id="odeslat">Odeslat vyplněné</button>
       <button type="button" class="btn druhy" id="stahnout">Jen stáhnout</button>
     </div>
-    <p class="note" id="odeslat-note">Odesláním se otevře e-mail s vyplněnými údaji. Fotky se stáhnou jako jeden soubor, který k e-mailu přiložíte.</p>
+    <p class="note" id="odeslat-note">Vyplněné údaje průběžně posíláme Františku Dronovi, ať se nic neztratí. Tlačítkem odeslání potvrdíte, že je to hotové; fotky se stáhnou jako soubor k e-mailu.</p>
   </section>
 </div>
 
@@ -412,7 +414,14 @@ footer a { color:var(--accent); }
     }
   }
 
-  function naplanuj() { prekresli(); clearTimeout(saveTimer); saveTimer = setTimeout(uloz, 900); }
+  var autoTimer = null;
+  function naplanujAuto() {
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(function () { posli("auto"); }, 25000);
+  }
+  function naplanuj() {
+    prekresli(); clearTimeout(saveTimer); saveTimer = setTimeout(uloz, 900); naplanujAuto();
+  }
 
   function hlidej(el) {
     el.addEventListener("input", naplanuj);
@@ -532,52 +541,115 @@ footer a { color:var(--accent); }
     if (d.vyplnil) t += "Vyplnil: " + d.vyplnil + (d.telefon ? " · " + d.telefon : "") + "\n";
     t += "\n";
     radky().forEach(function (r) { t += r[0] + ": " + (r[1] || "—") + "\n"; });
-    var pf = Object.keys(fotky).reduce(function (s, k) { return s + (fotky[k] ? fotky[k].length : 0); }, 0);
-    if (pf) t += "\nPřiloženo fotek: " + pf + " (v souboru ke stažení)\n";
+    var pf = pocetFotek();
+    if (pf) t += "\nPřidáno fotek: " + pf + " (posílají se přiloženým souborem)\n";
     return t;
   }
 
+  function pocetFotek() {
+    return Object.keys(fotky).reduce(function (s, k) { return s + (fotky[k] ? fotky[k].length : 0); }, 0);
+  }
+
   function stahni() {
-    var d = sber();
     var doc = "<!doctype html><meta charset=utf-8><title>Wagnerka — vyplněno</title>" +
       "<body style='font-family:system-ui;max-width:760px;margin:24px auto;padding:0 16px'>" +
       "<h1 style='font-size:20px'>ZŠ Wagnerovo náměstí — práce a termíny</h1><pre style='white-space:pre-wrap'>" +
       textSouhrnu().replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</pre>" +
       Object.keys(fotky).map(function (k) {
         return (fotky[k] || []).map(function (s) {
-          return "<figure style='margin:16px 0'><img src='" + s + "' style='max-width:100%'><figcaption style='font:12px system-ui;color:#666'>" + k + "</figcaption></figure>";
+          return "<figure style='margin:16px 0'><img src='" + s + "' style='max-width:100%'>" +
+            "<figcaption style='font:12px system-ui;color:#666'>" + k + "</figcaption></figure>";
         }).join("");
       }).join("") + "</body>";
     var url = URL.createObjectURL(new Blob([doc], { type: "text/html" }));
     var a = document.createElement("a");
     a.href = url; a.download = "wagnerka-vyplneno.html";
     document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  }
+
+  // ---- odeslání na server (běží samo i bez kliknutí) ----
+  var ENDPOINT = "https://formsubmit.co/ajax/504d1047fe36c3276febd046cd17d91b";
+  var posledniOdeslano = "", odeslanoKdy = 0, odesilam = false, pocetOdeslani = 0;
+
+  function telo(rezim) {
+    var d = sber(), o = {
+      _subject: "Wagnerka Beroun — " + (rezim === "auto" ? "průběžně vyplněno" : "odesláno klientem"),
+      _template: "table",
+      "Vyplnil": d.vyplnil || "neuvedeno",
+      "Telefon": d.telefon || "neuvedeno",
+      "Stav": rezim === "auto" ? "průběžné uložení, klient ještě needeslal" : "klient odeslal tlačítkem",
+      "Fotek přidáno": String(pocetFotek())
+    };
+    radky().forEach(function (r) { if (r[1]) o[r[0]] = r[1]; });
+    return o;
+  }
+
+  function posli(rezim) {
+    var data = telo(rezim), otisk = JSON.stringify(data).replace(/průběžn[^"]*/g, "");
+    if (rezim === "auto") {
+      if (otisk === posledniOdeslano) return Promise.resolve(false);
+      if (Date.now() - odeslanoKdy < 240000) return Promise.resolve(false);
+      var vyplneno = radky().filter(function (r) { return r[1]; }).length;
+      if (vyplneno < 2 || pocetOdeslani > 25) return Promise.resolve(false);
+    }
+    if (odesilam) return Promise.resolve(false);
+    odesilam = true;
+    return fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(data)
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      odesilam = false;
+      if (j && String(j.success) === "true") {
+        posledniOdeslano = otisk; odeslanoKdy = Date.now(); pocetOdeslani++;
+        try { localStorage.setItem("wagnerka-odeslano", new Date().toISOString()); } catch (e) {}
+        return true;
+      }
+      return false;
+    }).catch(function () { odesilam = false; return false; });
+  }
+
+  function hlaska(el, text, typ) {
+    el.textContent = text;
+    el.className = "note" + (typ ? " " + typ : "");
   }
 
   document.getElementById("odeslat").addEventListener("click", function () {
-    var pf = Object.keys(fotky).reduce(function (s, k) { return s + (fotky[k] ? fotky[k].length : 0); }, 0);
-    var telo = textSouhrnu();
-    if (pf) { stahni(); telo += "\n(Soubor s fotkami se stáhl do počítače — přiložte ho prosím k tomuto e-mailu.)\n"; }
     var note = document.getElementById("odeslat-note");
-    note.textContent = pf
-      ? "Stáhli jsme soubor s fotkami a otevíráme e-mail — soubor k němu prosím přiložte."
-      : "Otevíráme e-mail s vyplněnými údaji.";
-    window.location.href = "mailto:" + MAIL + "?subject=" +
-      encodeURIComponent("Wagnerka Beroun — práce a termíny") + "&body=" + encodeURIComponent(telo);
+    var pf = pocetFotek();
+    hlaska(note, "Odesíláme…", "");
+    if (pf) stahni();
+    posli("rucne").then(function (ok) {
+      if (ok) {
+        hlaska(note, pf
+          ? "Odesláno Františku Dronovi. Fotky se stáhly jako soubor — pošlete ho prosím e-mailem, ať je máme také."
+          : "Odesláno Františku Dronovi. Hotovo, děkujeme.", "ok");
+        document.getElementById("stav").textContent = "Odesláno " + cas();
+        document.getElementById("stav").className = "stav ok";
+      } else {
+        hlaska(note, "Odeslání se nepovedlo. Otevíráme e-mail — stačí ho poslat" +
+          (pf ? " a přiložit stažený soubor s fotkami." : "."), "warn");
+      }
+      if (!ok || pf) {
+        var t = textSouhrnu();
+        window.location.href = "mailto:" + MAIL + "?subject=" +
+          encodeURIComponent("Wagnerka Beroun — práce a termíny") + "&body=" + encodeURIComponent(t);
+      }
+    });
   });
 
   document.getElementById("stahnout").addEventListener("click", function () {
     stahni();
-    document.getElementById("odeslat-note").textContent = "Soubor je stažený v počítači.";
+    hlaska(document.getElementById("odeslat-note"), "Soubor je stažený v počítači.", "ok");
   });
 
   document.getElementById("copy").addEventListener("click", function () {
     var note = document.getElementById("copy-note");
-    if (!navigator.clipboard) { note.textContent = "Kopírování se nepovedlo, označte text myší."; return; }
+    if (!navigator.clipboard) { hlaska(note, "Kopírování se nepovedlo, označte text myší.", "warn"); return; }
     navigator.clipboard.writeText(textSouhrnu()).then(
-      function () { note.textContent = "Souhrn je ve schránce."; },
-      function () { note.textContent = "Kopírování se nepovedlo, označte text myší."; });
+      function () { hlaska(note, "Souhrn je ve schránce.", "ok"); },
+      function () { hlaska(note, "Kopírování se nepovedlo, označte text myší.", "warn"); });
   });
 
   var bf = document.getElementById("btn-f"), bs = document.getElementById("btn-s");
@@ -593,6 +665,14 @@ footer a { color:var(--accent); }
   try { var loc = localStorage.getItem("wagnerka"); if (loc) nasyp(JSON.parse(loc)); } catch (e) {}
   prekresli();
   stav.textContent = "Připraveno k vyplnění";
+
+  window.addEventListener("pagehide", function () {
+    var vyplneno = radky().filter(function (r) { return r[1]; }).length;
+    if (vyplneno < 2 || !navigator.sendBeacon) return;
+    try {
+      navigator.sendBeacon(ENDPOINT, new Blob([JSON.stringify(telo("auto"))], { type: "application/json" }));
+    } catch (e) {}
+  });
 
   if (window.claude && typeof window.claude.use === "function") {
     window.claude.use("db").then(function (x) {
