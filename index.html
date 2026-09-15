@@ -364,7 +364,7 @@ footer a { color:var(--accent); }
     var sec = el.closest(".cast, .moment, .otazka, .vlastni");
     var t = sec ? sec.querySelector("h3") : null;
     var nazev = t ? t.textContent : "";
-    if (!nazev && sec) {
+    if (!nazev && sec && sec.classList.contains("vlastni")) {
       var vst = sec.querySelector('input[data-nazev]');
       nazev = vst && vst.value ? vst.value : "Další práce";
     }
@@ -622,7 +622,12 @@ footer a { color:var(--accent); }
       "Stav": rezim === "auto" ? "průběžné uložení, klient ještě needeslal" : "klient odeslal tlačítkem",
       "Fotek nahráno": String(pocetFotek())
     };
-    radky().forEach(function (r) { if (r[1]) o[r[0]] = r[1]; });
+    radky().forEach(function (r) {
+      if (!r[1]) return;
+      var klic = r[0], n = 2;
+      while (o[klic] !== undefined) { klic = r[0] + " (" + n++ + ")"; }
+      o[klic] = r[1];
+    });
     return o;
   }
 
